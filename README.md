@@ -3,6 +3,9 @@ Description
 
 Event based irc client library.
 
+Fork of [thoj/go-ircevent](https://github.com/thoj/go-ircevent), maintained at
+[ohayoubot/go-ircevent](https://github.com/ohayoubot/go-ircevent).
+
 
 Features
 --------
@@ -14,7 +17,7 @@ Features
 
 Install
 -------
-	$ go get github.com/thoj/go-ircevent
+	$ go get github.com/ohayoubot/go-ircevent
 
 Example
 -------
