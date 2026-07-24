@@ -158,7 +158,9 @@ func (irc *Connection) RunCallbacks(event *Event) {
 
 	event.Ctx = context.Background()
 	if irc.CallbackTimeout != 0 {
-		event.Ctx, _ = context.WithTimeout(event.Ctx, irc.CallbackTimeout)
+		var cancel context.CancelFunc
+		event.Ctx, cancel = context.WithTimeout(event.Ctx, irc.CallbackTimeout)
+		defer cancel()
 	}
 
 	done := make(chan int)
