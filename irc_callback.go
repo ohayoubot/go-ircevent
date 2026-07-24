@@ -196,6 +196,25 @@ func (irc *Connection) RunCallbacks(event *Event) {
 	}
 }
 
+// Append (or prepend, for long nicks) a _ to the current nick and return the
+// result, so it can be tried again after the server rejected it. If
+// irc.nickcurrent hasn't been set yet it is seeded from irc.nick.
+func (irc *Connection) mangleNickcurrent() string {
+	irc.Lock()
+	defer irc.Unlock()
+
+	if irc.nickcurrent == "" {
+		irc.nickcurrent = irc.nick
+	}
+
+	if len(irc.nickcurrent) > 8 {
+		irc.nickcurrent = "_" + irc.nickcurrent
+	} else {
+		irc.nickcurrent = irc.nickcurrent + "_"
+	}
+	return irc.nickcurrent
+}
+
 func getFunctionName(f func(*Event)) string {
 	return runtime.FuncForPC(reflect.ValueOf(f).Pointer()).Name()
 }
@@ -232,33 +251,13 @@ func (irc *Connection) setupCallbacks() {
 	// work. It has to be set somewhere first in case the nick is already
 	// taken or unavailable from the beginning.
 	irc.AddCallback("437", func(e *Event) {
-		// If irc.nickcurrent hasn't been set yet, set to irc.nick
-		if irc.nickcurrent == "" {
-			irc.nickcurrent = irc.nick
-		}
-
-		if len(irc.nickcurrent) > 8 {
-			irc.nickcurrent = "_" + irc.nickcurrent
-		} else {
-			irc.nickcurrent = irc.nickcurrent + "_"
-		}
-		irc.SendRawf("NICK %s", irc.nickcurrent)
+		irc.SendRawf("NICK %s", irc.mangleNickcurrent())
 	})
 
 	// 433: ERR_NICKNAMEINUSE "<nick> :Nickname is already in use"
 	// Add a _ to current nick.
 	irc.AddCallback("433", func(e *Event) {
-		// If irc.nickcurrent hasn't been set yet, set to irc.nick
-		if irc.nickcurrent == "" {
-			irc.nickcurrent = irc.nick
-		}
-
-		if len(irc.nickcurrent) > 8 {
-			irc.nickcurrent = "_" + irc.nickcurrent
-		} else {
-			irc.nickcurrent = irc.nickcurrent + "_"
-		}
-		irc.SendRawf("NICK %s", irc.nickcurrent)
+		irc.SendRawf("NICK %s", irc.mangleNickcurrent())
 	})
 
 	irc.AddCallback("PONG", func(e *Event) {
@@ -272,9 +271,11 @@ func (irc *Connection) setupCallbacks() {
 	// NICK Define a nickname.
 	// Set irc.nickcurrent to the new nick actually used in this connection.
 	irc.AddCallback("NICK", func(e *Event) {
+		irc.Lock()
 		if e.Nick == irc.nick {
 			irc.nickcurrent = e.Message()
 		}
+		irc.Unlock()
 	})
 
 	// 1: RPL_WELCOME "Welcome to the Internet Relay Network <nick>!<user>@<host>"

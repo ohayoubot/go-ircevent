@@ -249,7 +249,7 @@ func TestConnection(t *testing.T) {
 	})
 
 	irccon2.AddCallback("NICK", func(e *Event) {
-		if irccon2.nickcurrent == ircnick2 {
+		if irccon2.GetNick() == ircnick2 {
 			t.Errorf("Nick change did not work!")
 		}
 	})

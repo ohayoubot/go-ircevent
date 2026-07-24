@@ -352,12 +352,16 @@ func (irc *Connection) SendRawf(format string, a ...interface{}) {
 // Set (new) nickname.
 // RFC 1459 details: https://tools.ietf.org/html/rfc1459#section-4.1.2
 func (irc *Connection) Nick(n string) {
+	irc.Lock()
 	irc.nick = n
+	irc.Unlock()
 	irc.SendRawf("NICK %s", n)
 }
 
 // Determine nick currently used with the connection.
 func (irc *Connection) GetNick() string {
+	irc.Lock()
+	defer irc.Unlock()
 	return irc.nickcurrent
 }
 
