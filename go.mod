@@ -1,6 +1,6 @@
 module github.com/ohayoubot/go-ircevent
 
-go 1.25.0
+go 1.26
 
 require (
 	golang.org/x/net v0.57.0
