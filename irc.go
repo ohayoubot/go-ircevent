@@ -103,7 +103,7 @@ func unescapeTagValue(value string) string {
 	return value
 }
 
-//Parse raw irc messages
+// Parse raw irc messages
 func parseToEvent(msg string) (*Event, error) {
 	msg = strings.TrimSuffix(msg, "\n") //Remove \r\n
 	msg = strings.TrimSuffix(msg, "\r")

@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/ohayoubot/go-ircevent"
 	"crypto/tls"
+	"github.com/ohayoubot/go-ircevent"
 	"log"
 	"os"
 )
@@ -37,7 +37,7 @@ func main() {
 	irccon.UseTLS = true
 	irccon.TLSConfig = &tls.Config{
 		InsecureSkipVerify: true,
-		Certificates: []tls.Certificate{clientCert},
+		Certificates:       []tls.Certificate{clientCert},
 	}
 	irccon.AddCallback("001", func(e *irc.Event) {})
 	irccon.AddCallback("376", func(e *irc.Event) {
