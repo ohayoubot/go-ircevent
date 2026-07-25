@@ -273,19 +273,19 @@ func (irc *Connection) Quit() {
 // Use the connection to join a given channel.
 // RFC 1459 details: https://tools.ietf.org/html/rfc1459#section-4.2.1
 func (irc *Connection) Join(channel string) {
-	irc.pwrite <- fmt.Sprintf("JOIN %s\r\n", channel)
+	irc.pwrite <- fmt.Sprintf("JOIN %s\r\n", sanitize(channel)) // not sanitizeParam
 }
 
 // Leave a given channel.
 // RFC 1459 details: https://tools.ietf.org/html/rfc1459#section-4.2.2
 func (irc *Connection) Part(channel string) {
-	irc.pwrite <- fmt.Sprintf("PART %s\r\n", channel)
+	irc.pwrite <- fmt.Sprintf("PART %s\r\n", sanitizeParam(channel))
 }
 
 // Send a notification to a nickname. This is similar to Privmsg but must not receive replies.
 // RFC 1459 details: https://tools.ietf.org/html/rfc1459#section-4.4.2
 func (irc *Connection) Notice(target, message string) {
-	irc.pwrite <- fmt.Sprintf("NOTICE %s :%s\r\n", target, message)
+	irc.pwrite <- fmt.Sprintf("NOTICE %s :%s\r\n", sanitizeParam(target), sanitize(message))
 }
 
 // Send a formated notification to a nickname.
@@ -297,7 +297,7 @@ func (irc *Connection) Noticef(target, format string, a ...interface{}) {
 // Send (action) message to a target (channel or nickname).
 // No clear RFC on this one...
 func (irc *Connection) Action(target, message string) {
-	irc.pwrite <- fmt.Sprintf("PRIVMSG %s :\001ACTION %s\001\r\n", target, message)
+	irc.pwrite <- fmt.Sprintf("PRIVMSG %s :\001ACTION %s\001\r\n", sanitizeParam(target), sanitize(message))
 }
 
 // Send formatted (action) message to a target (channel or nickname).
@@ -308,7 +308,7 @@ func (irc *Connection) Actionf(target, format string, a ...interface{}) {
 // Send (private) message to a target (channel or nickname).
 // RFC 1459 details: https://tools.ietf.org/html/rfc1459#section-4.4.1
 func (irc *Connection) Privmsg(target, message string) {
-	irc.pwrite <- fmt.Sprintf("PRIVMSG %s :%s\r\n", target, message)
+	irc.pwrite <- fmt.Sprintf("PRIVMSG %s :%s\r\n", sanitizeParam(target), sanitize(message))
 }
 
 // Send formated string to specified target (channel or nickname).
@@ -319,9 +319,9 @@ func (irc *Connection) Privmsgf(target, format string, a ...interface{}) {
 // Kick <user> from <channel> with <msg>. For no message, pass empty string ("")
 func (irc *Connection) Kick(user, channel, msg string) {
 	var cmd bytes.Buffer
-	cmd.WriteString(fmt.Sprintf("KICK %s %s", channel, user))
+	cmd.WriteString(fmt.Sprintf("KICK %s %s", sanitizeParam(channel), sanitizeParam(user)))
 	if msg != "" {
-		cmd.WriteString(fmt.Sprintf(" :%s", msg))
+		cmd.WriteString(fmt.Sprintf(" :%s", sanitize(msg)))
 	}
 	cmd.WriteString("\r\n")
 	irc.pwrite <- cmd.String()
@@ -331,17 +331,34 @@ func (irc *Connection) Kick(user, channel, msg string) {
 // empty string ("")
 func (irc *Connection) MultiKick(users []string, channel string, msg string) {
 	var cmd bytes.Buffer
-	cmd.WriteString(fmt.Sprintf("KICK %s %s", channel, strings.Join(users, ",")))
+	safeUsers := make([]string, len(users))
+	for i, user := range users {
+		safeUsers[i] = sanitizeParam(user)
+	}
+	cmd.WriteString(fmt.Sprintf("KICK %s %s", sanitizeParam(channel), strings.Join(safeUsers, ",")))
 	if msg != "" {
-		cmd.WriteString(fmt.Sprintf(" :%s", msg))
+		cmd.WriteString(fmt.Sprintf(" :%s", sanitize(msg)))
 	}
 	cmd.WriteString("\r\n")
 	irc.pwrite <- cmd.String()
 }
 
+// Strips the bytes that terminate or corrupt a protocol line
+var wireStripper = strings.NewReplacer("\r", "", "\n", "", "\x00", "")
+
+// Make a string safe to embed anywhere in an outgoing line.
+func sanitize(s string) string {
+	return wireStripper.Replace(s)
+}
+
+// Make a string safe to use as a single command parameter.
+func sanitizeParam(s string) string {
+	return strings.TrimLeft(strings.ReplaceAll(sanitize(s), " ", ""), ":")
+}
+
 // Send raw string.
 func (irc *Connection) SendRaw(message string) {
-	irc.pwrite <- message + "\r\n"
+	irc.pwrite <- sanitize(message) + "\r\n"
 }
 
 // Send raw formated string.
@@ -352,6 +369,8 @@ func (irc *Connection) SendRawf(format string, a ...interface{}) {
 // Set (new) nickname.
 // RFC 1459 details: https://tools.ietf.org/html/rfc1459#section-4.1.2
 func (irc *Connection) Nick(n string) {
+	// Track the nick we actually put on the wire, not the caller's raw string.
+	n = sanitizeParam(n)
 	irc.Lock()
 	irc.nick = n
 	irc.Unlock()
@@ -368,24 +387,25 @@ func (irc *Connection) GetNick() string {
 // Query information about a particular nickname.
 // RFC 1459: https://tools.ietf.org/html/rfc1459#section-4.5.2
 func (irc *Connection) Whois(nick string) {
-	irc.SendRawf("WHOIS %s", nick)
+	irc.SendRawf("WHOIS %s", sanitizeParam(nick))
 }
 
 // Query information about a given nickname in the server.
 // RFC 1459 details: https://tools.ietf.org/html/rfc1459#section-4.5.1
 func (irc *Connection) Who(nick string) {
-	irc.SendRawf("WHO %s", nick)
+	irc.SendRawf("WHO %s", sanitizeParam(nick))
 }
 
 // Set different modes for a target (channel or nickname).
 // RFC 1459 details: https://tools.ietf.org/html/rfc1459#section-4.2.3
 func (irc *Connection) Mode(target string, modestring ...string) {
 	if len(modestring) > 0 {
-		mode := strings.Join(modestring, " ")
-		irc.SendRawf("MODE %s %s", target, mode)
+		// Not sanitizeParam on the modes. They are space-separated by design.
+		mode := sanitize(strings.Join(modestring, " "))
+		irc.SendRawf("MODE %s %s", sanitizeParam(target), mode)
 		return
 	}
-	irc.SendRawf("MODE %s", target)
+	irc.SendRawf("MODE %s", sanitizeParam(target))
 }
 
 func (irc *Connection) ErrorChan() chan error {
@@ -490,11 +510,12 @@ func (irc *Connection) Connect(server string) error {
 	go irc.pingLoop()
 
 	if len(irc.WebIRC) > 0 {
-		irc.pwrite <- fmt.Sprintf("WEBIRC %s\r\n", irc.WebIRC)
+		// Not sanitizeParam. WEBIRC carries several space-separated arguments.
+		irc.pwrite <- fmt.Sprintf("WEBIRC %s\r\n", sanitize(irc.WebIRC))
 	}
 
 	if len(irc.Password) > 0 {
-		irc.pwrite <- fmt.Sprintf("PASS %s\r\n", irc.Password)
+		irc.pwrite <- fmt.Sprintf("PASS %s\r\n", sanitizeParam(irc.Password))
 	}
 
 	err = irc.negotiateCaps()
@@ -507,8 +528,8 @@ func (irc *Connection) Connect(server string) error {
 		realname = irc.RealName
 	}
 
-	irc.pwrite <- fmt.Sprintf("NICK %s\r\n", irc.nick)
-	irc.pwrite <- fmt.Sprintf("USER %s 0.0.0.0 0.0.0.0 :%s\r\n", irc.user, realname)
+	irc.pwrite <- fmt.Sprintf("NICK %s\r\n", sanitizeParam(irc.nick))
+	irc.pwrite <- fmt.Sprintf("USER %s 0.0.0.0 0.0.0.0 :%s\r\n", sanitizeParam(irc.user), sanitize(realname))
 	return nil
 }
 
@@ -546,7 +567,9 @@ func (irc *Connection) negotiateCaps() error {
 			for _, cap_name := range strings.Split(e.Arguments[2], " ") {
 				for _, req_cap := range irc.RequestCaps {
 					if cap_name == req_cap {
-						irc.pwrite <- fmt.Sprintf("CAP REQ :%s\r\n", cap_name)
+						// Echoed back from the server: parseToEvent only trims a
+						// trailing \r, so a mid-line one would survive into here.
+						irc.pwrite <- fmt.Sprintf("CAP REQ :%s\r\n", sanitizeParam(cap_name))
 						missing_caps--
 					}
 				}
