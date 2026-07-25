@@ -173,7 +173,7 @@ func (irc *Connection) writeLoop() {
 			}
 
 			if irc.Debug {
-				irc.Log.Printf("--> %s\n", strings.TrimSpace(b))
+				irc.Log.Printf("--> %s\n", redactLine(b))
 			}
 
 			// Set a write deadline based on the time out
@@ -354,6 +354,41 @@ func sanitize(s string) string {
 // Make a string safe to use as a single command parameter.
 func sanitizeParam(s string) string {
 	return strings.TrimLeft(strings.ReplaceAll(sanitize(s), " ", ""), ":")
+}
+
+const redacted = "<redacted>"
+
+var saslPublicArgs = map[string]bool{
+	"+":        true,
+	"*":        true,
+	"PLAIN":    true,
+	"EXTERNAL": true,
+}
+
+// Mask credentials in an outbound line so debug logging cannot leak them.
+func redactLine(line string) string {
+	line = strings.TrimSpace(line)
+	cmd, args, hasArgs := strings.Cut(line, " ")
+	if !hasArgs || args == "" {
+		return line
+	}
+
+	switch strings.ToUpper(cmd) {
+	case "PASS":
+		return cmd + " " + redacted
+	case "AUTHENTICATE":
+		if saslPublicArgs[strings.ToUpper(args)] {
+			return line
+		}
+		return cmd + " " + redacted
+	case "OPER":
+		name, _, hasPass := strings.Cut(args, " ")
+		if !hasPass {
+			return cmd + " " + redacted
+		}
+		return cmd + " " + name + " " + redacted
+	}
+	return line
 }
 
 // Send raw string.
