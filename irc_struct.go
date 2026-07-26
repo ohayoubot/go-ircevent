@@ -42,12 +42,13 @@ type Connection struct {
 	RealName string // The real name we want to display.
 	// If zero-value defaults to the user.
 
-	socket net.Conn
-	pwrite chan string
-	end    chan struct{}
+	socket    net.Conn
+	pwrite    chan string
+	end       chan struct{}
+	sendMutex sync.Mutex // Guards pwrite and end, not the connection mutex.
 
-	nick        string //The nickname we want.
-	nickcurrent string //The nickname we currently have.
+	nick        string // The nickname we want.
+	nickcurrent string // The nickname we currently have.
 	user        string
 	registered  bool
 	events      map[string]map[int]func(*Event)
@@ -61,7 +62,7 @@ type Connection struct {
 	Log                    *log.Logger
 
 	stopped bool
-	quit    bool //User called Quit, do not reconnect.
+	quit    bool // User called Quit, do not reconnect.
 
 	idCounter int // assign unique IDs to callbacks
 }
@@ -70,10 +71,10 @@ type Connection struct {
 type Event struct {
 	Code       string
 	Raw        string
-	Nick       string //<nick>
-	Host       string //<nick>!<usr>@<host>
-	Source     string //<host>
-	User       string //<usr>
+	Nick       string // <nick>
+	Host       string // <nick>!<usr>@<host>
+	Source     string // <host>
+	User       string // <usr>
 	Arguments  []string
 	Tags       map[string]string
 	Connection *Connection
