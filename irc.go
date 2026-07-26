@@ -44,35 +44,36 @@ const CAP_TIMEOUT = time.Second * 15
 var ErrDisconnected = errors.New("Disconnect Called")
 
 // Read data from a connection. To be used as a goroutine.
-func (irc *Connection) readLoop() {
+func (irc *Connection) readLoop(socket net.Conn, end chan struct{}) {
 	defer irc.Done()
-	r := irc.Encoding.NewDecoder().Reader(irc.socket)
+	r := irc.Encoding.NewDecoder().Reader(socket)
 	br := bufio.NewReaderSize(r, 512)
 
 	errChan := irc.ErrorChan()
 
 	for {
 		select {
-		case <-irc.end:
+		case <-end:
 			return
 		default:
 			// Set a read deadline based on the combined timeout and ping frequency
 			// We should ALWAYS have received a response from the server within the timeout
 			// after our own pings
-			if irc.socket != nil {
-				irc.socket.SetReadDeadline(time.Now().Add(irc.Timeout + irc.PingFreq))
-			}
+			socket.SetReadDeadline(time.Now().Add(irc.Timeout + irc.PingFreq))
 
 			msg, err := br.ReadString('\n')
 
 			// We got past our blocking read, so bin timeout
-			if irc.socket != nil {
-				var zero time.Time
-				irc.socket.SetReadDeadline(zero)
-			}
+			var zero time.Time
+			socket.SetReadDeadline(zero)
 
 			if err != nil {
-				errChan <- err
+				// Disconnect closes the socket to break us out of the read above
+				select {
+				case <-end:
+				default:
+					errChan <- err
+				}
 				return
 			}
 
@@ -159,16 +160,16 @@ func parseToEvent(msg string) (*Event, error) {
 }
 
 // Loop to write to a connection. To be used as a goroutine.
-func (irc *Connection) writeLoop() {
+func (irc *Connection) writeLoop(socket net.Conn, pwrite chan string, end chan struct{}) {
 	defer irc.Done()
-	w := irc.Encoding.NewEncoder().Writer(irc.socket)
+	w := irc.Encoding.NewEncoder().Writer(socket)
 	errChan := irc.ErrorChan()
 	for {
 		select {
-		case <-irc.end:
+		case <-end:
 			return
-		case b := <-irc.pwrite:
-			if b == "" || irc.socket == nil {
+		case b := <-pwrite:
+			if b == "" {
 				return
 			}
 
@@ -177,16 +178,20 @@ func (irc *Connection) writeLoop() {
 			}
 
 			// Set a write deadline based on the time out
-			irc.socket.SetWriteDeadline(time.Now().Add(irc.Timeout))
+			socket.SetWriteDeadline(time.Now().Add(irc.Timeout))
 
 			_, err := w.Write([]byte(b))
 
 			// Past blocking write, bin timeout
 			var zero time.Time
-			irc.socket.SetWriteDeadline(zero)
+			socket.SetWriteDeadline(zero)
 
 			if err != nil {
-				errChan <- err
+				select {
+				case <-end:
+				default:
+					errChan <- err
+				}
 				return
 			}
 		}
@@ -195,7 +200,7 @@ func (irc *Connection) writeLoop() {
 
 // Pings the server if we have not received any messages for 5 minutes
 // to keep the connection alive. To be used as a goroutine.
-func (irc *Connection) pingLoop() {
+func (irc *Connection) pingLoop(end chan struct{}) {
 	defer irc.Done()
 	ticker := time.NewTicker(1 * time.Minute) // Tick every minute for monitoring
 	ticker2 := time.NewTicker(irc.PingFreq)   // Tick at the ping frequency.
@@ -218,7 +223,7 @@ func (irc *Connection) pingLoop() {
 				irc.SendRawf("NICK %s", irc.nick)
 			}
 			irc.Unlock()
-		case <-irc.end:
+		case <-end:
 			ticker.Stop()
 			ticker2.Stop()
 			return
@@ -474,28 +479,35 @@ func (irc *Connection) Connected() bool {
 // A disconnect sends all buffered messages (if possible),
 // stops all goroutines and then closes the socket.
 func (irc *Connection) Disconnect() {
-	irc.Lock()
-	defer irc.Unlock()
-
 	irc.sendMutex.Lock()
-	if irc.end != nil {
-		close(irc.end)
-	}
-	irc.sendMutex.Unlock()
-
-	irc.Wait()
-
-	// pwrite is never closed: every send method is a producer on it, and
-	// closing it under them is a panic. Dropping the reference is enough.
-	irc.sendMutex.Lock()
+	end := irc.end
 	irc.end = nil
 	irc.pwrite = nil
 	irc.sendMutex.Unlock()
 
-	if irc.socket != nil {
-		irc.socket.Close()
+	irc.Lock()
+	socket := irc.socket
+	irc.socket = nil
+	irc.Unlock()
+
+	if end != nil {
+		close(end)
 	}
-	irc.ErrorChan() <- ErrDisconnected
+
+	if socket != nil {
+		socket.Close()
+	}
+
+	// pingLoop takes the connection mutex so Wait() would
+	// deadlock against the goroutine it is waiting for.
+	irc.Wait()
+
+	if errChan := irc.ErrorChan(); errChan != nil {
+		select {
+		case errChan <- ErrDisconnected:
+		default: // nobody is reading, don't block the caller
+		}
+	}
 }
 
 // Reconnect to a server using the current connection.
@@ -543,33 +555,38 @@ func (irc *Connection) Connect(server string) error {
 	}
 
 	dialer := proxy.FromEnvironmentUsing(&net.Dialer{Timeout: irc.Timeout})
-	irc.socket, err = dialer.Dial("tcp", irc.Server)
+	socket, err := dialer.Dial("tcp", irc.Server)
 	if err != nil {
 		return err
 	}
 	if irc.UseTLS {
-		irc.socket = tls.Client(irc.socket, irc.TLSConfig)
+		socket = tls.Client(socket, irc.TLSConfig)
 	}
+	irc.Lock()
+	irc.socket = socket
+	irc.Unlock()
 
 	if irc.Encoding == nil {
 		irc.Encoding = encoding.Nop
 	}
 
 	irc.stopped = false
-	irc.Log.Printf("Connected to %s (%s)\n", irc.Server, irc.socket.RemoteAddr())
+	irc.Log.Printf("Connected to %s (%s)\n", irc.Server, socket.RemoteAddr())
 
 	// A fresh write queue and shutdown signal for this generation of the
 	// connection, so a send left over from the previous one cannot reach it.
+	pwrite := make(chan string, 10)
+	end := make(chan struct{})
 	irc.sendMutex.Lock()
-	irc.pwrite = make(chan string, 10)
-	irc.end = make(chan struct{})
+	irc.pwrite = pwrite
+	irc.end = end
 	irc.sendMutex.Unlock()
 
 	irc.Error = make(chan error, 10)
 	irc.Add(3)
-	go irc.readLoop()
-	go irc.writeLoop()
-	go irc.pingLoop()
+	go irc.readLoop(socket, end)
+	go irc.writeLoop(socket, pwrite, end)
+	go irc.pingLoop(end)
 
 	if len(irc.WebIRC) > 0 {
 		// Not sanitizeParam. WEBIRC carries several space-separated arguments.

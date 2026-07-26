@@ -58,7 +58,7 @@ func TestWriteLoopLogsRedactedButSendsRealCredentials(t *testing.T) {
 	c.Error = make(chan error, 1)
 
 	c.Add(1)
-	go c.writeLoop()
+	go c.writeLoop(c.socket, c.pwrite, c.end)
 	defer close(c.end)
 
 	c.pwrite <- line
